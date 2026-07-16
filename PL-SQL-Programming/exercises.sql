@@ -303,5 +303,489 @@ exception
 end;
 /
 
+--FUNCTIONS
+
+--Scenario 1
+
+create or replace function CalculatedAge(
+    p_dob in date
+    ) return number is v_ages number;
+
+begin
+    if p_dob > sysdate then
+        return 0;
+    end if;
+
+    v_ages := trunc(months_between(sysdate, p_dob)/12);
+    return v_ages;
+
+exception
+    when others then return null;
+
+end CalculateAge;
+/
+
+--Scenario 2
+
+-- EMI = p x r x (1 + r)^N / (1 + r)^N - 1; p = loan amt, r = monthly interest rate = annual rate / 12 / 100, N = number of months = years x 12
+create or replace function CalculateMonthlyInstallment(
+    p_loan_amt in number,
+    p_annual_rate in number,
+    p_years in number
+) return number is v_monthly_rate number; v_months number; v_emi number;
+
+begin 
+    if p_loan_amt <= 0 or p_years <= 0 then
+    return 0;
+    end if;
+
+    v_monthly_rate := (p_annual_rate /12) / 100;
+    v_months := p_years * 12;
+
+    v_emi := (p_loan_amt * v_monthly_rate * power(1 + v_monthly_rate, v_months))
+            / (power(1 + v_monthly_rate, v_months) - 1);
+    
+    return v_emi;
+
+exception 
+    when others then return null;
+
+end;
+/
+
+
+
+--Scenario 3
+
+create or replace function hassufficientbalance (
+    p_accountID in number,
+    p_amount in number
+)return boolean is v_balance number;
+
+begin
+    select balance in v_balance from accounts where p_accountID = accountID;
+     if v_balance >= p_amount then
+        return true;
+     else 
+        return false;
+     end if;
+
+exception
+    when no_data_found then return false;
+    when others then return false;
+
+end;
+/
+
+--TRIGGERS
+
+--Scenario 1
+
+create or replace trigger UpdateCustomerLastModified
+before update on Customers
+for each row
+
+BEGIN
+    :new.lastmodified := sysdate;
+end;
+/
+
+--Scenario 2
+create table auditlog(
+    logID number primary key,
+    transactionID number,
+    accountId number,
+    actiondate date,
+    action varchar(50)
+);
+
+create or replace trigger LogTransaction
+after insert on Transactions
+for each row
+
+begin
+    insert into auditlog(logId, transcationID, accountID, actiondate, action)
+    values(:new.transactionID, :new.transactionID, :new.accountID, sysdate, "Inserted");
+
+
+end;
+/
+
+--Scenario 3
+
+create or replace trigger CheckTransactionRule
+before insert on Transactions
+for each row
+
+declare v_balance number;
+
+BEGIN
+    if :new.transactiontype = 'deposit' THEN 
+        if :new.amount <= 0 then raise_application_error (-20001,
+        'deposit must be positive');
+        end if;
+    end if;
+
+    if :new.transactiontype = 'withdrawal' THEN
+        if :new.amount > v_balance then raise_application_error (-20002,
+        'insufficient balance');
+        end if;
+    end if;
+end;
+/
+
+--CURSORS
+
+--Scenario 1
+
+DECLARE
+
+    CURSOR GenerateMonthlyStatements IS
+        SELECT
+            c.CustomerID,
+            c.Name,
+            t.TransactionID,
+            t.TransactionDate,
+            t.Amount,
+            t.TransactionType
+        FROM Customers c
+        JOIN Accounts a
+            ON c.CustomerID = a.CustomerID
+        JOIN Transactions t
+            ON t.AccountID = a.AccountID
+        WHERE EXTRACT(MONTH FROM t.TransactionDate)
+                =
+              EXTRACT(MONTH FROM SYSDATE)
+        AND EXTRACT(YEAR FROM t.TransactionDate)
+                =
+              EXTRACT(YEAR FROM SYSDATE);
+
+    v_customerid Customers.CustomerID%TYPE;
+    v_name Customers.Name%TYPE;
+    v_transactionid Transactions.TransactionID%TYPE;
+    v_date Transactions.TransactionDate%TYPE;
+    v_amount Transactions.Amount%TYPE;
+    v_type Transactions.TransactionType%TYPE;
+
+BEGIN
+
+    OPEN GenerateMonthlyStatements;
+
+    LOOP
+
+        FETCH GenerateMonthlyStatements
+        INTO
+            v_customerid,
+            v_name,
+            v_transactionid,
+            v_date,
+            v_amount,
+            v_type;
+
+        EXIT WHEN GenerateMonthlyStatements%NOTFOUND;
+
+        DBMS_OUTPUT.PUT_LINE(
+            'Customer ID: ' || v_customerid
+        );
+
+        DBMS_OUTPUT.PUT_LINE(
+            'Customer Name: ' || v_name
+        );
+
+        DBMS_OUTPUT.PUT_LINE(
+            'Transaction ID: ' || v_transactionid
+        );
+
+        DBMS_OUTPUT.PUT_LINE(
+            'Date: '
+            || TO_CHAR(v_date,'DD-MON-YYYY')
+        );
+
+        DBMS_OUTPUT.PUT_LINE(
+            'Amount: ' || v_amount
+        );
+
+        DBMS_OUTPUT.PUT_LINE(
+            'Transaction Type: ' || v_type
+        );
+
+    END LOOP;
+
+    CLOSE GenerateMonthlyStatements;
+
+END;
+/
+--Scenario 2
+
+SET SERVEROUTPUT ON;
+
+DECLARE
+
+    CURSOR ApplyAnnualFee IS
+        SELECT AccountID, Balance
+        FROM Accounts;
+
+    v_accountid Accounts.AccountID%TYPE;
+    v_balance Accounts.Balance%TYPE;
+
+    v_fee NUMBER := 100;
+
+BEGIN
+
+    OPEN ApplyAnnualFee;
+
+    LOOP
+
+        FETCH ApplyAnnualFee
+        INTO v_accountid,
+             v_balance;
+
+        EXIT WHEN ApplyAnnualFee%NOTFOUND;
+
+        UPDATE Accounts
+        SET Balance = Balance - v_fee
+        WHERE AccountID = v_accountid;
+
+        DBMS_OUTPUT.PUT_LINE(
+            'Annual fee deducted from Account ID: '
+            || v_accountid
+        );
+
+    END LOOP;
+
+    CLOSE ApplyAnnualFee;
+
+    COMMIT;
+
+END;
+/
+
+--Scenario 3
+
+SET SERVEROUTPUT ON;
+
+DECLARE
+
+    CURSOR UpdateLoanInterestRates IS
+        SELECT LoanID,
+               InterestRate
+        FROM Loans;
+
+    v_loanid Loans.LoanID%TYPE;
+    v_rate Loans.InterestRate%TYPE;
+
+BEGIN
+
+    OPEN UpdateLoanInterestRates;
+
+    LOOP
+
+        FETCH UpdateLoanInterestRates
+        INTO v_loanid,
+             v_rate;
+
+        EXIT WHEN UpdateLoanInterestRates%NOTFOUND;
+
+        UPDATE Loans
+        SET InterestRate = InterestRate + 0.5
+        WHERE LoanID = v_loanid;
+
+        DBMS_OUTPUT.PUT_LINE(
+            'Interest rate updated for Loan ID: '
+            || v_loanid
+        );
+
+    END LOOP;
+
+    CLOSE UpdateLoanInterestRates;
+
+    COMMIT;
+
+END;
+/
+
+--PACKAGES
+
+--Scenario 1
+
+CREATE OR REPLACE PACKAGE BODY CustomerManagement AS
+
+    PROCEDURE AddNewCustomer(
+        p_customerid NUMBER,
+        p_name VARCHAR2,
+        p_dob DATE,
+        p_balance NUMBER
+    )
+    IS
+    BEGIN
+
+        INSERT INTO Customers
+        VALUES(
+            p_customerid,
+            p_name,
+            p_dob,
+            p_balance,
+            SYSDATE
+        );
+
+    END;
+
+
+    PROCEDURE UpdateCustomerDetails(
+        p_customerid NUMBER,
+        p_name VARCHAR2,
+        p_balance NUMBER
+    )
+    IS
+    BEGIN
+
+        UPDATE Customers
+        SET Name = p_name,
+            Balance = p_balance
+        WHERE CustomerID = p_customerid;
+
+    END;
+
+
+    FUNCTION GetCustomerBalance(
+        p_customerid NUMBER
+    )
+    RETURN NUMBER
+    IS
+        v_balance NUMBER;
+    BEGIN
+
+        SELECT Balance
+        INTO v_balance
+        FROM Customers
+        WHERE CustomerID = p_customerid;
+
+        RETURN v_balance;
+
+    END;
+
+END CustomerManagement;
+/
+
+--Scenario 2
+
+CREATE OR REPLACE PACKAGE BODY EmployeeManagement AS
+
+    PROCEDURE HireEmployee(
+        p_employeeid NUMBER,
+        p_name VARCHAR2,
+        p_position VARCHAR2,
+        p_salary NUMBER,
+        p_department VARCHAR2,
+        p_hiredate DATE
+    )
+    IS
+    BEGIN
+
+        INSERT INTO Employees
+        VALUES(
+            p_employeeid,
+            p_name,
+            p_position,
+            p_salary,
+            p_department,
+            p_hiredate
+        );
+
+    END;
+
+
+    PROCEDURE UpdateEmployeeDetails(
+        p_employeeid NUMBER,
+        p_salary NUMBER
+    )
+    IS
+    BEGIN
+
+        UPDATE Employees
+        SET Salary = p_salary
+        WHERE EmployeeID = p_employeeid;
+
+    END;
+
+
+    FUNCTION CalculateAnnualSalary(
+        p_employeeid NUMBER
+    )
+    RETURN NUMBER
+    IS
+        v_salary NUMBER;
+    BEGIN
+
+        SELECT Salary
+        INTO v_salary
+        FROM Employees
+        WHERE EmployeeID = p_employeeid;
+
+        RETURN v_salary * 12;
+
+    END;
+
+END EmployeeManagement;
+/
+
+--Scenario 3
+
+CREATE OR REPLACE PACKAGE BODY AccountOperations AS
+
+    PROCEDURE OpenAccount(
+        p_accountid NUMBER,
+        p_customerid NUMBER,
+        p_type VARCHAR2,
+        p_balance NUMBER
+    )
+    IS
+    BEGIN
+
+        INSERT INTO Accounts
+        VALUES(
+            p_accountid,
+            p_customerid,
+            p_type,
+            p_balance,
+            SYSDATE
+        );
+
+    END;
+
+
+    PROCEDURE CloseAccount(
+        p_accountid NUMBER
+    )
+    IS
+    BEGIN
+
+        DELETE FROM Accounts
+        WHERE AccountID = p_accountid;
+
+    END;
+
+
+    FUNCTION GetTotalBalance(
+        p_customerid NUMBER
+    )
+    RETURN NUMBER
+    IS
+        v_total NUMBER;
+    BEGIN
+
+        SELECT SUM(Balance)
+        INTO v_total
+        FROM Accounts
+        WHERE CustomerID = p_customerid;
+
+        RETURN NVL(v_total,0);
+
+    END;
+
+END AccountOperations;
+/
+
+
 
 
